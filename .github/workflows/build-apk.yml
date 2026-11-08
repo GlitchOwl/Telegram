@@ -1,0 +1,133 @@
+name: Build Telegram APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Build with the bundled test credentials or your own credentials
+        type: choice
+        options:
+          - test
+          - personal
+        default: test
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check artifact visibility
+        if: inputs.mode == 'personal' && !github.event.repository.private
+        run: |
+          echo '::error::Personal builds embed app credentials in the APK. Use a private repository.'
+          exit 1
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configure personal build
+        if: inputs.mode == 'personal'
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          def required(name):
+              value = os.environ.get(name)
+              if not value:
+                  raise SystemExit(f"Missing GitHub Actions secret: {name}")
+              return value
+
+          api_id = required("TELEGRAM_API_ID")
+          api_hash = required("TELEGRAM_API_HASH")
+          if not re.fullmatch(r"[1-9][0-9]{0,9}", api_id) or int(api_id) > 2147483647:
+              raise SystemExit("TELEGRAM_API_ID must be a positive Java int")
+          if not re.fullmatch(r"[0-9a-fA-F]{32}", api_hash):
+              raise SystemExit("TELEGRAM_API_HASH must contain 32 hexadecimal characters")
+
+          signing = {
+              "RELEASE_KEY_ALIAS": required("ANDROID_KEY_ALIAS"),
+              "RELEASE_KEY_PASSWORD": required("ANDROID_KEY_PASSWORD"),
+              "RELEASE_STORE_PASSWORD": required("ANDROID_STORE_PASSWORD"),
+          }
+          keystore = base64.b64decode("".join(required("ANDROID_KEYSTORE_BASE64").split()), validate=True)
+          if not keystore:
+              raise SystemExit("ANDROID_KEYSTORE_BASE64 decodes to an empty file")
+
+          firebase = required("GOOGLE_SERVICES_JSON")
+          clients = json.loads(firebase).get("client", [])
+          packages = {
+              client.get("client_info", {}).get("android_client_info", {}).get("package_name")
+              for client in clients
+          }
+          if "org.telegram.messenger.web" not in packages:
+              raise SystemExit("GOOGLE_SERVICES_JSON must include org.telegram.messenger.web")
+
+          build_vars = Path("TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java")
+          source = build_vars.read_text(encoding="utf-8")
+          source, id_count = re.subn(r"(\bAPP_ID\s*=\s*)\d+;", lambda m: m[1] + api_id + ";", source)
+          source, hash_count = re.subn(r'(\bAPP_HASH\s*=\s*)"[^"]*";', lambda m: m[1] + '"' + api_hash + '";', source)
+          if (id_count, hash_count) != (1, 1):
+              raise SystemExit("Unexpected Telegram API declarations in BuildVars.java")
+
+          # Keep signing values in Gradle's user properties so they override the bundled defaults.
+          def property_value(value):
+              units = value.encode("utf-16-be")
+              return "".join(f"\\u{int.from_bytes(units[i:i+2], 'big'):04x}" for i in range(0, len(units), 2))
+
+          os.umask(0o077)
+          gradle_user_home = Path(os.environ.get("GRADLE_USER_HOME", Path.home() / ".gradle"))
+          gradle_user_home.mkdir(parents=True, exist_ok=True)
+          (gradle_user_home / "gradle.properties").write_text(
+              "".join(f"{key}={property_value(value)}\n" for key, value in signing.items()), encoding="ascii"
+          )
+          build_vars.write_text(source, encoding="utf-8")
+          Path("TMessagesProj/config/release.keystore").write_bytes(keystore)
+          for module in ("TMessagesProj", "TMessagesProj_AppStandalone"):
+              (Path(module) / "google-services.json").write_text(firebase, encoding="utf-8")
+          PY
+
+      - name: Install Android SDK components
+        run: |
+          (set +o pipefail; yes | sdkmanager --licenses >/dev/null)
+          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+
+      - name: Assemble ARM64 standalone APK
+        run: |
+          bash gradlew --no-daemon --no-parallel --max-workers=2 \
+            '-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g' \
+            -PtelegramBuildAbi=arm64-v8a :TMessagesProj_AppStandalone:assembleAfatStandalone
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-arm64-${{ inputs.mode }}
+          path: TMessagesProj_AppStandalone/build/outputs/apk/afat/standalone/app.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

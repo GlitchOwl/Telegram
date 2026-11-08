@@ -143,6 +143,13 @@ android {
         minSdkVersion 23
         targetSdkVersion 36
 
+        def buildAbi = project.findProperty('telegramBuildAbi')
+        if (buildAbi) {
+            ndk {
+                abiFilters buildAbi
+            }
+        }
+
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 
         multiDexEnabled true
