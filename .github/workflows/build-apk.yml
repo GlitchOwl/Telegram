@@ -115,8 +115,23 @@ jobs:
 
       - name: Install Android SDK components
         run: |
-          (set +o pipefail; yes | sdkmanager --licenses >/dev/null)
-          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$RUNNER_TEMP/android-sdk}}"
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            tools_dir="$(mktemp -d)"
+            curl --fail --silent --show-error --location --retry 3 \
+              'https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip' \
+              --output "$tools_dir/cmdline-tools.zip"
+            unzip -q "$tools_dir/cmdline-tools.zip" -d "$tools_dir"
+            mkdir -p "$sdk_root/cmdline-tools"
+            mv "$tools_dir/cmdline-tools" "$sdk_root/cmdline-tools/15859902"
+            sdkmanager="$sdk_root/cmdline-tools/15859902/bin/sdkmanager"
+          fi
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          (set +o pipefail; yes | "$sdkmanager" --sdk_root="$sdk_root" --licenses >/dev/null)
+          "$sdkmanager" --sdk_root="$sdk_root" --install \
+            'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
 
       - name: Assemble ARM64 standalone APK
         run: |
