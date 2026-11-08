@@ -1073,6 +1073,16 @@ public class NotificationsController extends BaseController implements Notificat
         });
     }
 
+    private boolean isPrivateChatNotification(MessageObject messageObject) {
+        if (messageObject == null || messageObject.messageOwner == null ||
+                messageObject.isStoryPush || messageObject.isLiveStoryPush ||
+                messageObject.isStoryReactionPush || messageObject.isOauthPush) {
+            return false;
+        }
+        long dialogId = messageObject.getDialogId();
+        return DialogObject.isUserDialog(dialogId) || DialogObject.isEncryptedDialog(dialogId);
+    }
+
     public void processNewMessages(ArrayList<MessageObject> messageObjects, boolean isLast, boolean isFcm, CountDownLatch countDownLatch) {
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d("NotificationsController: processNewMessages msgs.size()=" + (messageObjects == null ? "null" : messageObjects.size()) + " isLast=" + isLast + " isFcm=" + isFcm + ")");
@@ -1125,6 +1135,9 @@ public class NotificationsController extends BaseController implements Notificat
 
             for (int a = 0; a < messageObjects.size(); a++) {
                 MessageObject messageObject = messageObjects.get(a);
+                if (!isPrivateChatNotification(messageObject)) {
+                    continue;
+                }
                 if (messageObject.messageOwner != null && (messageObject.isImportedForward() ||
                         messageObject.messageOwner.action instanceof TLRPC.TL_messageActionSetMessagesTTL ||
                         messageObject.messageOwner.silent && (messageObject.messageOwner.action instanceof TLRPC.TL_messageActionContactSignUp || messageObject.messageOwner.action instanceof TLRPC.TL_messageActionUserJoined)) ||

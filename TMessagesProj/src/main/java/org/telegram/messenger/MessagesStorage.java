@@ -4025,7 +4025,7 @@ public class MessagesStorage extends BaseController {
                     getChatsInternal(TextUtils.join(",", chatsToLoad), chats);
                 }
 
-                AndroidUtilities.runOnUIThread(() -> getNotificationsController().processLoadedUnreadMessages(pushDialogs, messages, pushMessages, users, chats, encryptedChats, storyPushes.values()));
+                // Notifications are populated only by new messages, not restored from the database.
             } catch (Exception e) {
                 checkSQLException(e);
             } finally {
