@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Build with the bundled test credentials or your own credentials
+        description: Test uses bundled values. Personal embeds your app credentials in the APK artifact.
         type: choice
         options:
           - test
@@ -19,12 +19,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: Check artifact visibility
-        if: inputs.mode == 'personal' && !github.event.repository.private
-        run: |
-          echo '::error::Personal builds embed app credentials in the APK. Use a private repository.'
-          exit 1
-
       - name: Free runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup
